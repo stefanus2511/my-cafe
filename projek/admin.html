@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Admin · Cafe Gue</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="side" id="side"></nav>
+      <main>
+        <div class="top"><h2>Pesanan</h2><b id="today"></b></div>
+        <div class="row">
+          <input id="date" type="date" />
+          <select id="status">
+            <option value="aktif">Pesanan aktif</option>
+            <option value="">Semua status</option>
+            <option>Menunggu Pembayaran</option>
+            <option>Menunggu Diproses</option>
+            <option>Sedang Diproses</option>
+            <option>Siap Diambil</option>
+            <option>Selesai</option>
+            <option>Dibatalkan</option>
+          </select>
+          <input id="q" placeholder="Cari transaksi, meja, atau antrean" />
+        </div>
+        <div class="stats" id="summary"></div>
+        <div id="list"></div>
+      </main>
+    </div>
+    <div id="toast"></div>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="app.js"></script>
+    <script>
+      nav("admin");
+      let orders = [],
+        off = null;
+      $("#date").value = dk();
+      $("#date").onchange = muat;
+      $("#status").onchange = draw;
+      $("#q").oninput = draw;
+
+      function muat() {
+        if (off) off();
+        off = db
+          .collection("orders")
+          .where("tanggal", "==", $("#date").value || dk())
+          .onSnapshot(
+            (s) => {
+              orders = s.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .sort((a, b) => (b.waktu || 0) - (a.waktu || 0));
+              draw();
+            },
+            galat,
+          );
+      }
+
+      function draw() {
+        const q = $("#q").value.trim().toLowerCase(),
+          status = $("#status").value,
+          waiting = orders.filter((o) => o.status === "Menunggu Pembayaran").length,
+          preparing = orders.filter((o) =>
+            ["Menunggu Diproses", "Sedang Diproses"].includes(o.status),
+          ).length,
+          ready = orders.filter((o) => o.status === "Siap Diambil").length,
+          filtered = orders.filter((o) => {
+            const matchStatus = status === "aktif" ? AKTIF(o) : !status || o.status === status;
+            const text = [o.noTransaksi, o.meja, o.noAntrian]
+              .join(" ")
+              .toLowerCase();
+            return matchStatus && text.includes(q);
+          });
+        $("#today").textContent = $("#date").value;
+        $("#summary").innerHTML =
+          `<div class="c stat"><small>Menunggu pembayaran</small><b>${waiting}</b></div><div class="c stat"><small>Dalam proses</small><b>${preparing}</b></div><div class="c stat"><small>Siap diambil</small><b>${ready}</b></div>`;
+        $("#list").innerHTML =
+          filtered.map(kartuPesanan).join("") ||
+          '<p class="mut">Tidak ada pesanan pada tanggal atau filter ini.</p>';
+      }
+
+      function kartuPesanan(o) {
+        const items = (o.items || [])
+          .map((i) => {
+            const qty = Number(i.qty) || 0,
+              tax = Number.isFinite(Number(i.pajak))
+                ? Number(i.pajak)
+                : Math.round(((Number(i.harga) || 0) * (Number(i.pajakPersen) || 0)) / 100);
+            return `<div class="ln"><span>${E(i.nama)} × ${qty}</span><b>${R(((Number(i.harga) || 0) + tax) * qty)}</b></div>`;
+          })
+          .join("");
+        const waktu = o.waktu
+          ? new Date(o.waktu).toLocaleTimeString("id-ID", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "-";
+        return `<div class="c"><div class="top"><div><h3>${E(o.noTransaksi || o.id)}</h3><small>${waktu} · Meja ${E(o.meja || "-")}${o.noAntrian ? " · " + E(o.noAntrian) : ""}</small></div><span class="tag ${WARNA[o.status] || ""}">${E(o.status || "Status tidak diketahui")}</span></div>${items}<div class="ln"><span>Pembayaran: ${E(o.statusBayar || "-")} · ${E(o.metode || "-")}</span><b>${R(o.total)}</b></div>${o.catatan ? `<small>Catatan: ${E(o.catatan)}</small>` : ""}${aksiPesanan(o)}</div>`;
+      }
+
+      function aksiPesanan(o) {
+        const id = E(o.id),
+          cancel = `<button class="g r" onclick="ubahPesanan('${id}','Dibatalkan')">Batalkan</button>`;
+        if (o.status === "Menunggu Pembayaran")
+          return `<div class="acts"><select id="metode-${id}">${METODE.map((m) => `<option>${E(m)}</option>`).join("")}</select><button onclick="bayar('${id}')">Konfirmasi pembayaran</button>${cancel}</div>`;
+        const next = {
+          "Menunggu Diproses": ["Sedang Diproses", "Mulai proses"],
+          "Sedang Diproses": ["Siap Diambil", "Tandai siap diambil"],
+          "Siap Diambil": ["Selesai", "Selesaikan pesanan"],
+        }[o.status];
+        if (!AKTIF(o)) return "";
+        return `<div class="acts">${o.noAntrian ? `<button class="g" onclick="panggilAntrian('${E(o.noAntrian)}')">Panggil antrean</button>` : ""}${next ? `<button onclick="ubahPesanan('${id}','${next[0]}')">${next[1]}</button>` : ""}${cancel}</div>`;
+      }
+
+      async function bayar(id) {
+        try {
+          await konfirmasi(id, $("#metode-" + id).value);
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+      async function ubahPesanan(id, status) {
+        try {
+          await ubahStatus(id, status);
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+      async function panggilAntrian(no) {
+        try {
+          await panggil(no);
+          toast("Nomor antrean dipanggil");
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+
+      muat();
+    </script>
+  </body>
+</html>

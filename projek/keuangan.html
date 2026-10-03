@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Keuangan · Cafe Gue</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="finance">
+    <div class="shell">
+      <nav class="side" id="side"></nav>
+      <main>
+        <h2>Keuangan</h2>
+        <div class="row">
+          <select id="mode">
+            <option value="hari">Hari ini</option>
+            <option value="kemarin">Kemarin</option>
+            <option value="tgl">Tanggal tertentu</option>
+            <option value="bulan">Bulan tertentu</option>
+            <option value="rentang">Rentang tanggal</option>
+          </select>
+          <input id="a" type="date" /><input id="b" type="date" /><input
+            id="m"
+            type="month"
+          />
+        </div>
+        <div id="out"></div>
+      </main>
+    </div>
+    <div id="toast"></div>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="app.js"></script>
+    <script>
+      nav("keuangan");
+      let D = { o: [], e: [], f: "", t: "" },
+        off = [];
+      $("#a").value = $("#b").value = dk();
+      $("#m").value = dk().slice(0, 7);
+      function periode() {
+        const md = $("#mode").value,
+          y = new Date(Date.now() - 864e5);
+        $("#a").style.display = ["tgl", "rentang"].includes(md) ? "" : "none";
+        $("#b").style.display = md === "rentang" ? "" : "none";
+        $("#m").style.display = md === "bulan" ? "" : "none";
+        if (md === "hari") return [dk(), dk()];
+        if (md === "kemarin") return [dk(y), dk(y)];
+        if (md === "tgl") return [$("#a").value, $("#a").value];
+        if (md === "bulan") {
+          const m = $("#m").value;
+          return [m + "-01", m + "-31"];
+        }
+        return [$("#a").value, $("#b").value];
+      }
+      async function muat() {
+        off.forEach((f) => f());
+        off = [];
+        const [f, t] = periode();
+        if (!f || !t || f > t) return toast("Periode tidak valid");
+        D.f = f;
+        D.t = t;
+        const L = (q, k) =>
+          off.push(
+            q.onSnapshot(
+              (s) => {
+                D[k] = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+                gambar();
+              },
+              (e) => toast(e.message),
+            ),
+          );
+        L(
+          db
+            .collection("orders")
+            .where("tanggal", ">=", f)
+            .where("tanggal", "<=", t),
+          "o",
+        );
+        L(
+          db
+            .collection("expenses")
+            .where("tanggal", ">=", f)
+            .where("tanggal", "<=", t),
+          "e",
+        );
+      }
+      ["mode", "a", "b", "m"].forEach((i) => ($("#" + i).onchange = muat));
+      const grup = (a, k, v) =>
+        Object.entries(
+          a.reduce((m, x) => ((m[k(x)] = (m[k(x)] || 0) + v(x)), m), {}),
+        ).sort();
+      const pajakItem = (i) =>
+        Number.isFinite(Number(i.pajak))
+          ? Number(i.pajak)
+          : Math.round(((Number(i.harga) || 0) * (Number(i.pajakPersen) || 0)) / 100);
+      const punyaModal = (i) =>
+        i.hargaModal !== undefined && i.hargaModal !== null && i.hargaModal !== "";
+      function gambar() {
+        const ok = D.o.filter(SAH),
+          items = ok.flatMap((o) => o.items || []),
+          omzet = items.reduce(
+            (a, i) => a + (Number(i.harga) || 0) * (Number(i.qty) || 0),
+            0,
+          ),
+          pajak = items.reduce(
+            (a, i) => a + pajakItem(i) * (Number(i.qty) || 0),
+            0,
+          ),
+          modal = items
+            .filter(punyaModal)
+            .reduce(
+              (a, i) => a + (Number(i.hargaModal) || 0) * (Number(i.qty) || 0),
+              0,
+            ),
+          profit = items
+            .filter(punyaModal)
+            .reduce(
+              (a, i) =>
+                a +
+                Number(i.keuntungan ?? Number(i.harga) - Number(i.hargaModal)) *
+                  (Number(i.qty) || 0),
+              0,
+            ),
+          dibayar = ok.reduce((a, o) => a + (Number(o.total) || 0), 0),
+          ex = D.e.reduce((a, e) => a + e.nominal, 0),
+          hr = grup(
+            ok,
+            (o) => o.tanggal,
+            (o) =>
+              (o.items || []).reduce(
+                (a, i) => a + (Number(i.harga) || 0) * (Number(i.qty) || 0),
+                0,
+              ),
+          ),
+          mx = Math.max(1, ...hr.map((h) => h[1]));
+        const S = (l, v) =>
+            `<div class="c stat"><small>${l}</small><b>${v}</b></div>`,
+          L = (a) =>
+            a
+              .map(
+                ([k, v]) =>
+                  `<div class="ln"><span>${E(k)}</span><b>${R(v)}</b></div>`,
+              )
+              .join("") || "<small>-</small>";
+        $("#out").innerHTML =
+          `<div class="stats">${S("Omzet sebelum pajak", R(omzet))}${S("Pajak terkumpul", R(pajak))}${S("Total dibayar", R(dibayar))}${S("Jumlah transaksi", ok.length)}${S("Total modal", R(modal))}${S("Keuntungan kotor", R(profit))}${S("Total pengeluaran", R(ex))}${S("Keuntungan setelah pengeluaran", R(profit - ex))}</div>
+        <small>Omzet dan keuntungan dihitung dari transaksi terkonfirmasi. Modal dan keuntungan hanya mencakup transaksi yang memiliki data modal; transaksi lama mungkin belum memilikinya. Keuntungan setelah pengeluaran belum memperhitungkan biaya lain yang tidak dicatat.</small>
+  <div class="c" style="margin-top:12px"><h3>Omset per hari</h3><div class="bars">${hr.map(([d, v]) => `<div style="height:${(v / mx) * 100}%" title="${d}: ${R(v)}"><i>${d.slice(8)}</i></div>`).join("") || "<small>Belum ada data</small>"}</div>${L(hr)}</div>
+  <div class="two"><div class="c"><h3>Total dibayar per metode</h3>${L(
+    grup(
+      ok,
+      (o) => o.metode || "-",
+      (o) => o.total,
+    ),
+  )}</div><div class="c"><h3>Pengeluaran per kategori</h3>${L(
+    grup(
+      D.e,
+      (e) => e.kategori,
+      (e) => e.nominal,
+    ),
+  )}</div></div>
+  <div class="c"><h3>Catat pengeluaran</h3><div class="row"><input id="xt" type="date" value="${dk()}"><input id="xn" type="number" min="0" placeholder="Nominal"><select id="xk">${KATX.map((k) => `<option>${k}`).join("")}</select><input id="xe" placeholder="Keterangan"></div><button onclick="tambah()">Simpan pengeluaran</button></div>
+  <div class="c"><h3>Riwayat pengeluaran</h3>${
+    D.e
+      .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1))
+      .map(
+        (e) =>
+          `<div class="ln"><span>${e.tanggal} · ${E(e.kategori)} <small>${E(e.keterangan)}</small></span><b>${R(e.nominal)}</b></div>`,
+      )
+      .join("") || "<small>Belum ada</small>"
+  }</div>
+  <div class="c"><h3>Export Excel (${D.f} s/d ${D.t})</h3><div class="acts"><button onclick="xl('tx')">Laporan transaksi</button><button class="g" onclick="xl('ex')">Laporan pengeluaran</button></div></div>`;
+      }
+      async function tambah() {
+        const n = +$("#xn").value;
+        if (!(n > 0) || !$("#xe").value.trim())
+          return toast("Nominal dan keterangan wajib diisi");
+        try {
+          await db
+            .collection("expenses")
+            .add({
+              tanggal: $("#xt").value,
+              nominal: n,
+              kategori: $("#xk").value,
+              keterangan: $("#xe").value.trim(),
+            });
+          toast("Pengeluaran disimpan");
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+      function xl(k) {
+        const ok = D.o.filter(SAH).sort((a, b) => a.waktu - b.waktu);
+        const rows =
+          k === "ex"
+            ? D.e
+                .sort((a, b) => (a.tanggal < b.tanggal ? -1 : 1))
+                .map((e) => ({
+                  Tanggal: e.tanggal,
+                  Kategori: e.kategori,
+                  Keterangan: e.keterangan,
+                  Nominal: e.nominal,
+                }))
+            : ok.flatMap((o) =>
+                o.items.map((i) => ({
+                  Tanggal: o.tanggal,
+                  "No. Transaksi": o.noTransaksi,
+                  "No. Antrian": o.noAntrian,
+                  "No. Meja": o.meja,
+                  Menu: i.nama,
+                  Jumlah: i.qty,
+                  "Harga jual": i.harga,
+                  "Harga modal": i.hargaModal ?? "",
+                  Keuntungan: i.keuntungan ?? "",
+                  "Pajak (%)": i.pajakPersen || 0,
+                  Pajak: pajakItem(i) * i.qty,
+                  Omzet: i.harga * i.qty,
+                  "Total dibayar": (i.harga + pajakItem(i)) * i.qty,
+                  "Metode Pembayaran": o.metode,
+                  Status: o.status,
+                })),
+              );
+        if (!rows.length) return toast("Tidak ada data pada periode ini");
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = Object.keys(rows[0]).map((h) => ({
+          wch: Math.min(
+            40,
+            Math.max(h.length, ...rows.map((r) => String(r[h]).length)) + 2,
+          ),
+        }));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(
+          wb,
+          ws,
+          k === "ex" ? "Pengeluaran" : "Transaksi",
+        );
+        XLSX.writeFile(
+          wb,
+          `cafe-${k === "ex" ? "pengeluaran" : "transaksi"}-${D.f}_${D.t}.xlsx`,
+        );
+      }
+      muat();
+    </script>
+  </body>
+</html>

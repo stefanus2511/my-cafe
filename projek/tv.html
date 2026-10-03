@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Antrian · Cafe Gue</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="tv">
+    <div class="tvw">
+      <div class="now">
+        <h3>NOMOR ANTRIAN SEKARANG</h3>
+        <div class="big" id="cur">-</div>
+        <div class="st" id="cst">Belum ada panggilan</div>
+      </div>
+      <div class="tvr">
+        <div class="box">
+          <h3>Berikutnya</h3>
+          <div id="nx"></div>
+        </div>
+        <div class="box">
+          <h3>Siap diambil</h3>
+          <div id="rd"></div>
+        </div>
+      </div>
+      <div class="foot">
+        <span>Silakan menunggu, pesanan Anda sedang disiapkan.</span
+        ><b id="clk"></b>
+      </div>
+    </div>
+    <div id="toast"></div>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="app.js"></script>
+    <script>
+      // Halaman ini hanya membaca data. Tidak ada tombol atau fungsi penulisan.
+      let orders = [],
+        q = {},
+        last = null;
+      function tampil() {
+        const o = orders.find((x) => x.noAntrian === q.current),
+          L = (a, f) =>
+            a.map(f).join("") || '<small style="color:#BFAA92">-</small>',
+          row = (x) =>
+            `<div class="tvn">${x.noAntrian}<small>${x.meja ? "Meja " + E(x.meja) : ""}</small></div>`;
+        $("#cur").textContent = q.current || "-";
+        $("#cst").textContent = q.current
+          ? o
+            ? o.status === "Sedang Diproses"
+              ? "Sedang Diproses"
+              : o.status
+            : "Sedang Diproses"
+          : "Belum ada panggilan";
+        $("#nx").innerHTML = L(
+          orders
+            .filter(
+              (x) =>
+                x.status === "Menunggu Diproses" && x.noAntrian !== q.current,
+            )
+            .slice(0, 3),
+          row,
+        );
+        $("#rd").innerHTML = L(
+          orders.filter((x) => x.status === "Siap Diambil").slice(0, 4),
+          row,
+        );
+        if (q.callId && q.callId !== last) {
+          if (last !== null) {
+            const b = $("#cur");
+            b.classList.remove("pop");
+            void b.offsetWidth;
+            b.classList.add("pop");
+          }
+          last = q.callId;
+        } else if (last === null) last = q.callId || 0;
+      }
+      dengar(db.collection("orders").where("tanggal", "==", dk()), (d) => {
+        orders = d.filter((x) => x.noAntrian).sort((a, b) => a.seq - b.seq);
+        tampil();
+      });
+      db.doc("queue/state").onSnapshot((s) => {
+        q = s.data() || {};
+        tampil();
+      });
+      setInterval(
+        () =>
+          ($("#clk").textContent = new Date().toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })),
+        1000,
+      );
+    </script>
+  </body>
+</html>

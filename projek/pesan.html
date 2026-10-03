@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Buat Pesanan · Cafe Gue</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="side" id="side"></nav>
+      <main>
+        <div class="top">
+          <h2>Buat Pesanan</h2>
+          <small id="date"></small>
+        </div>
+        <div class="row">
+          <input id="table" placeholder="Nomor meja" />
+          <input id="search" placeholder="Cari menu" />
+        </div>
+        <div class="category-filter" role="group" aria-label="Filter kategori menu">
+          <button class="active" data-category="" aria-pressed="true" onclick="pilihKategori('')">Semua</button>
+          <button data-category="Minuman" aria-pressed="false" onclick="pilihKategori('Minuman')">Minuman</button>
+          <button data-category="Makanan" aria-pressed="false" onclick="pilihKategori('Makanan')">Makanan</button>
+          <button data-category="Snack" aria-pressed="false" onclick="pilihKategori('Snack')">Snack</button>
+        </div>
+        <div class="order-layout">
+          <section>
+            <div class="order-list" id="menus"></div>
+          </section>
+          <aside class="order-cart">
+            <div class="c">
+              <h3>Rincian Pesanan</h3>
+              <div id="cart"><small>Belum ada menu dipilih.</small></div>
+              <div class="ln"><span>Omzet</span><b id="subtotal">Rp0</b></div>
+              <div class="ln"><span>Pajak</span><b id="taxTotal">Rp0</b></div>
+              <div class="ln"><strong>Total dibayar</strong><b id="grandTotal">Rp0</b></div>
+              <textarea id="note" rows="3" placeholder="Catatan pesanan (opsional)"></textarea>
+              <button id="submit" onclick="kirimPesanan()">Buat Pesanan</button>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+    <div id="toast"></div>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="app.js"></script>
+    <script>
+      nav("pesan");
+      let menus = [],
+        cart = new Map(),
+        kategoriAktif = "";
+      $("#date").textContent = dk();
+      $("#search").oninput = gambarMenu;
+      dengar(db.collection("menus").orderBy("nama"), (data) => {
+        menus = data.filter((m) => m.aktif && Number(m.stok) > 0);
+        for (const id of cart.keys())
+          if (!menus.some((m) => m.id === id)) cart.delete(id);
+        gambarMenu();
+        gambarKeranjang();
+      });
+
+      function gambarMenu() {
+        const q = $("#search").value.trim().toLowerCase(),
+          pilihan = menus.filter(
+            (m) =>
+              m.nama.toLowerCase().includes(q) &&
+              (!kategoriAktif ||
+                String(m.kategori || "").toLowerCase() ===
+                  kategoriAktif.toLowerCase()),
+          );
+        $("#menus").innerHTML =
+          pilihan
+            .map((m) => {
+              const qty = cart.get(m.id) || 0,
+                pajak = Math.round((Number(m.harga) * Number(m.pajakPersen || 0)) / 100);
+              return `<div class="c order-item"><div><b>${E(m.nama)}</b><small>${E(m.kategori)} · Stok ${m.stok}</small><strong>${R(Number(m.harga) + pajak)} <small>/ item termasuk pajak</small></strong></div><button onclick="ubahJumlah('${m.id}',1)" aria-label="Tambah ${E(m.nama)}">${qty ? "+ " + qty : "Tambah"}</button></div>`;
+            })
+            .join("") || '<p class="mut">Tidak ada menu tersedia.</p>';
+      }
+
+      function pilihKategori(kategori) {
+        kategoriAktif = kategori;
+        document.querySelectorAll(".category-filter button").forEach((button) => {
+          const dipilih = button.dataset.category === kategori;
+          button.classList.toggle("active", dipilih);
+          button.setAttribute("aria-pressed", String(dipilih));
+        });
+        gambarMenu();
+      }
+
+      function ubahJumlah(id, perubahan) {
+        const menu = menus.find((m) => m.id === id);
+        if (!menu) return;
+        const qty = Math.max(0, Math.min(Number(menu.stok), (cart.get(id) || 0) + perubahan));
+        qty ? cart.set(id, qty) : cart.delete(id);
+        gambarMenu();
+        gambarKeranjang();
+      }
+
+      function gambarKeranjang() {
+        const entries = [...cart.entries()]
+          .map(([id, qty]) => ({ menu: menus.find((m) => m.id === id), qty }))
+          .filter((entry) => entry.menu);
+        let subtotal = 0,
+          taxTotal = 0;
+        $("#cart").innerHTML =
+          entries
+            .map(({ menu, qty }) => {
+              const harga = Number(menu.harga) || 0,
+                pajak = Math.round((harga * Number(menu.pajakPersen || 0)) / 100);
+              subtotal += harga * qty;
+              taxTotal += pajak * qty;
+              return `<div class="ln"><span>${E(menu.nama)}<small>${R(harga)} + pajak ${Number(menu.pajakPersen || 0)}%</small></span><div class="qt"><button class="g" onclick="ubahJumlah('${menu.id}',-1)" aria-label="Kurangi ${E(menu.nama)}">−</button><b>${qty}</b><button class="g" onclick="ubahJumlah('${menu.id}',1)" aria-label="Tambah ${E(menu.nama)}">+</button></div></div>`;
+            })
+            .join("") || "<small>Belum ada menu dipilih.</small>";
+        $("#subtotal").textContent = R(subtotal);
+        $("#taxTotal").textContent = R(taxTotal);
+        $("#grandTotal").textContent = R(subtotal + taxTotal);
+      }
+
+      async function kirimPesanan() {
+        const meja = $("#table").value.trim(),
+          items = [...cart.entries()].map(([id, qty]) => {
+            const menu = menus.find((m) => m.id === id);
+            return { id, nama: menu.nama, harga: Number(menu.harga), qty };
+          });
+        if (!meja) return toast("Nomor meja wajib diisi");
+        if (!items.length) return toast("Pilih setidaknya satu menu");
+        const button = $("#submit");
+        button.disabled = true;
+        try {
+          const noTransaksi = await buatPesanan(meja, $("#note").value.trim(), items);
+          cart.clear();
+          $("#note").value = "";
+          gambarMenu();
+          gambarKeranjang();
+          toast(`${noTransaksi} berhasil dibuat`);
+        } catch (e) {
+          toast(e.message);
+        } finally {
+          button.disabled = false;
+        }
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Menu · Cafe Gue</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;800&family=Plus+Jakarta+Sans:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="side" id="side"></nav>
+      <main>
+        <div class="top">
+          <h2>Menu &amp; stok</h2>
+          <button onclick="bukaForm()">+ Menu baru</button>
+        </div>
+        <div class="row">
+          <input id="q" placeholder="Cari menu" /><select id="kf">
+            <option value="">Semua kategori</option>
+          </select>
+        </div>
+        <div class="menus" id="list"></div>
+      </main>
+    </div>
+    <div id="toast"></div>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+    <script src="app.js"></script>
+    <script>
+      nav("menu");
+      let menus = [];
+      dengar(db.collection("menus").orderBy("nama"), (d) => {
+        menus = d;
+        const k = $("#kf"),
+          v = k.value;
+        k.innerHTML =
+          '<option value="">Semua kategori</option>' +
+          [...new Set([...KAT, ...d.map((m) => m.kategori)])]
+            .map((c) => `<option ${c === v ? "selected" : ""}>${E(c)}`)
+            .join("");
+        draw();
+      });
+      function draw() {
+        const q = $("#q").value.toLowerCase(),
+          k = $("#kf").value;
+        $("#list").innerHTML =
+          menus
+            .filter(
+              (m) =>
+                m.nama.toLowerCase().includes(q) && (!k || m.kategori === k),
+            )
+            .map((m) => {
+              const s = statusStok(m);
+              return `<div class="c"><div class="top"><b>${E(m.nama)}</b><span class="tag ${s[1]}">${s[0]}</span></div><small>${E(m.kategori)}</small><div class="ln"><span>${R(m.harga)}</span><b>Stok ${m.stok}</b></div>
+    <div class="acts"><button onclick="stok('${m.id}')">Stok</button><button class="g" onclick="bukaForm('${m.id}')">Ubah</button><button class="g ${m.aktif ? "r" : ""}" onclick="db.doc('menus/${m.id}').update({aktif:${!m.aktif}})">${m.aktif ? "Nonaktifkan" : "Aktifkan"}</button></div></div>`;
+            })
+            .join("") ||
+          '<p class="mut">Belum ada menu. Klik “+ Menu baru”.</p>';
+      }
+      $("#q").oninput = draw;
+      $("#kf").onchange = draw;
+      function bukaForm(id) {
+        const m = menus.find((x) => x.id === id) || {
+          nama: "",
+          harga: "",
+          hargaModal: 0,
+          keuntungan: 0,
+          pajakPersen: 0,
+          kategori: "Minuman",
+          stok: 0,
+        };
+        const hargaModal = Number(m.hargaModal) || 0,
+          keuntungan =
+            m.keuntungan ?? Math.max(0, Number(m.harga) - hargaModal);
+        modal(
+          `<h3>${id ? "Ubah" : "Tambah"} menu</h3><input id="n" placeholder="Nama menu" value="${E(m.nama)}"><label for="hm">Modal (Rp.)</label><input id="hm" type="number" min="0" value="${hargaModal}" oninput="hitungHarga()"><label for="profit">Keuntungan (Rp.)</label><input id="profit" type="number" min="0" value="${keuntungan}" oninput="hitungHarga()"><label for="h">Harga jual sebelum pajak (Rp.)</label><input id="h" type="number" value="${hargaModal + keuntungan}" readonly><label for="tax">Pajak (%) opsional</label><input id="tax" type="number" min="0" step="0.01" value="${m.pajakPersen || 0}" oninput="hitungHarga()"><small id="pricePreview"></small><input id="k" list="kl" placeholder="Kategori" value="${E(m.kategori)}"><datalist id="kl">${KAT.map((c) => `<option>${c}`).join("")}</datalist>${id ? "" : '<input id="s" type="number" min="0" placeholder="Stok awal" value="0">'}<div class="acts"><button onclick="simpan('${id || ""}')">Simpan</button><button class="g" onclick="closeM()">Batal</button></div>`,
+        );
+        hitungHarga();
+      }
+      function hitungHarga() {
+        const harga =
+            (Number($("#hm").value) || 0) + (Number($("#profit").value) || 0),
+          persen = Number($("#tax").value) || 0,
+          pajak = Math.round((harga * persen) / 100);
+        $("#h").value = harga;
+        $("#pricePreview").textContent = `Total per item termasuk pajak: ${R(harga + pajak)}`;
+      }
+      async function simpan(id) {
+        const hargaModal = Number($("#hm").value),
+          keuntungan = Number($("#profit").value),
+          pajakPersen = Number($("#tax").value || 0);
+        if (
+          !Number.isFinite(hargaModal) ||
+          !Number.isFinite(keuntungan) ||
+          !Number.isFinite(pajakPersen) ||
+          hargaModal < 0 ||
+          keuntungan < 0 ||
+          pajakPersen < 0
+        )
+          return toast("Modal, keuntungan, dan pajak harus berupa angka positif");
+        const d = {
+          nama: $("#n").value.trim(),
+          harga: hargaModal + keuntungan,
+          hargaModal,
+          keuntungan,
+          pajakPersen,
+          kategori: $("#k").value.trim() || "Lainnya",
+        };
+        if (!d.nama) return toast("Nama menu wajib diisi");
+        try {
+          id
+            ? await db.doc("menus/" + id).update(d)
+            : await db
+                .collection("menus")
+                .add({
+                  ...d,
+                  stok: Math.max(0, +$("#s").value || 0),
+                  aktif: true,
+                });
+          closeM();
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+      function stok(id) {
+        const m = menus.find((x) => x.id === id);
+        modal(
+          `<h3>Stok ${E(m.nama)}</h3><small>Sekarang ${m.stok}. Isi angka positif untuk menambah, negatif untuk mengurangi.</small><input id="d" type="number" placeholder="Perubahan stok"><div class="acts"><button onclick="ubahStok('${id}')">Simpan</button><button class="g" onclick="closeM()">Batal</button></div>`,
+        );
+      }
+      async function ubahStok(id) {
+        const d = parseInt($("#d").value, 10);
+        if (!d) return toast("Isi perubahan stok");
+        try {
+          await db.runTransaction(async (t) => {
+            const r = db.doc("menus/" + id),
+              s = await t.get(r);
+            t.update(r, { stok: Math.max(0, s.data().stok + d) });
+          });
+          closeM();
+        } catch (e) {
+          toast(e.message);
+        }
+      }
+    </script>
+  </body>
+</html>
